@@ -84,18 +84,13 @@ def extract_functions(content):
         return []
 
 
-def is_function(tup):
-    """ Takes (name, object) tuple, returns True if it is a function.
-    """
-    name, item = tup
-    return isinstance(item, types.FunctionType)
-
-
 def check_case(case_data, func_address):
     if func_address:
         import_path = 'func_list.{}'.format(func_address.replace('.py', ''))
         func_list = importlib.reload(importlib.import_module(import_path))
-        module_functions_dict = dict(filter(is_function, vars(func_list).items()))
+        module_functions_dict = {name: item for name, item in vars(func_list).items() if
+                                 isinstance(item, types.FunctionType)}
+        # module_functions_dict = dict(filter(is_function, vars(func_list).items()))
 
     if isinstance(case_data, list):
         for c in case_data:
@@ -124,3 +119,36 @@ def check_case(case_data, func_address):
                 func = func.split('(')[0]
                 if func not in module_functions_dict:
                     return '函数“{}”在文件引用中没有定义'.format(func)
+
+
+def convert(variable):
+    _temp = json.dumps(variable)
+    content = {v['key']: v['value'] for v in variable if v['key'] != ''}
+    for variable_name in extract_variables(_temp):
+        if content.get(variable_name):
+            # content contains one or several variables
+            _temp = _temp.replace(
+                "${}".format(variable_name),
+                str(content.get(variable_name)), 1
+            )
+    return _temp
+
+
+def merge_config(pro_config, scene_config):
+    for _s in scene_config:
+        for _p in pro_config['config']['variables']:
+            if _p['key'] == _s['key']:
+                break
+        else:
+            pro_config['config']['variables'].append(_s)
+
+    _temp = convert(pro_config['config']['variables'])
+
+    pro_config['config']['variables'] = [{v['key']: v['value']} for v in json.loads(_temp)
+                                         if v['key'] != '']
+    return pro_config
+
+
+if __name__ == '__main__':
+    a = '${func($test)},$open,'
+    print(extract_variables(a))

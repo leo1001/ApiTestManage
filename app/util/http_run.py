@@ -1,14 +1,10 @@
 import copy
-import importlib
-
-import time
-
 from app.models import *
 from httprunner.task import HttpRunner
-# import httprunner
 from httprunner.testcase import *
 from ..util.global_variable import *
 import platform
+from ..util.utils import merge_config
 
 
 def main_ate(cases):
@@ -68,114 +64,77 @@ class RunCase(object):
     def pro_config(project_id):
         pro_cfg_data = {'config': {'name': 'config_name', 'request': {}}, 'testcases': [], 'name': 'config_name'}
         project_config = Project.query.filter_by(id=project_id).first()
-        if json.loads(project_config.headers):
-            # self.all_data['config']['request']['headers'] = {}
-            pro_cfg_data['config']['request']['headers'] = {h['key']: h['value'] for h in
-                                                            json.loads(project_config.headers) if
-                                                            h['key'] != ''}
+
+        pro_cfg_data['config']['request']['headers'] = {h['key']: h['value'] for h in
+                                                        json.loads(project_config.headers) if h.get('key')}
 
         pro_cfg_data['config']['variables'] = json.loads(project_config.variables)
         return pro_cfg_data
 
-    @staticmethod
-    def merge_config(pro_config, scene_config):
-        for _s in scene_config:
-            for _p in pro_config['config']['variables']:
-                if _p['key'] == _s['key']:
-                    break
-            else:
-                pro_config['config']['variables'].append(_s)
-        pro_config['config']['variables'] = [{v['key']: v['value']} for v in pro_config['config']['variables']
-                                             if v['key'] != '']
-        return pro_config
-
-    def get_case(self, case, pro_config):
+    def get_case(self, scene_case, pro_config):
         if self.run_type:
-            one_case = ApiMsg.query.filter_by(id=case.apiMsg_id).first()
+            api_case = ApiMsg.query.filter_by(id=scene_case.apiMsg_id).first()
         else:
-            one_case = case
+            api_case = scene_case
 
-        temp_case_data = {'name': case.name,
-                          'request': {'method': one_case.method, 'files': {}}}
-        if case.up_func:
-            temp_case_data['setup_hooks'] = [case.up_func]
-        if case.down_func:
-            temp_case_data['teardown_hooks'] = [case.down_func]
-        if json.loads(one_case.headers):
-            temp_case_data['request']['headers'] = {h['key']: h['value'] for h in json.loads(one_case.headers)
+        temp_case_data = {'name': scene_case.name,
+                          'request': {'method': api_case.method,
+                                      'files': {},
+                                      'data': {}}}
+        if scene_case.up_func:
+            temp_case_data['setup_hooks'] = [scene_case.up_func]
+        if scene_case.down_func:
+            temp_case_data['teardown_hooks'] = [scene_case.down_func]
+        if json.loads(api_case.headers):
+            temp_case_data['request']['headers'] = {h['key']: h['value'] for h in json.loads(api_case.headers)
                                                     if h['key']}
 
-        if one_case.status_url == '0':
-            temp_case_data['request']['url'] = pro_config.host + one_case.url
-        elif one_case.status_url == '1':
-            temp_case_data['request']['url'] = pro_config.host_two + one_case.url
-        elif one_case.status_url == '2':
-            temp_case_data['request']['url'] = pro_config.host_three + one_case.url
-        elif one_case.status_url == '3':
-            temp_case_data['request']['url'] = pro_config.host_four + one_case.url
+        temp_case_data['request']['url'] = getattr(pro_config, HOST[api_case.status_url]) + api_case.url
 
-        if one_case.func_address:
+        if api_case.func_address:
             temp_case_data['import_module_functions'] = [
-                'func_list.{}'.format(one_case.func_address.replace('.py', ''))]
+                'func_list.{}'.format(api_case.func_address.replace('.py', ''))]
         # if self.run_type:
-        if not self.run_type or json.loads(case.status_variables)[0]:
-            if not self.run_type or json.loads(case.status_variables)[1]:
-                if one_case.method == 'GET':
-                    temp_case_data['request']['params'] = {variable['key']: variable['value'] for variable in
-                                                           json.loads(case.variables) if variable['key']}
+        if not self.run_type or json.loads(scene_case.status_variables)[0]:
+            if not self.run_type or json.loads(scene_case.status_variables)[1]:
+                _variables = json.loads(scene_case.variables)
+
+            else:
+                _variables = json.loads(api_case.variables)
+
+            if api_case.method == 'GET':
+                temp_case_data['request']['params'] = {variable['key']: variable['value'] for variable in
+                                                       _variables if variable.get('key')}
+            else:
+                if api_case.variable_type == 'data':
+                    for variable in _variables:
+                        if variable['param_type'] == 'string' and variable.get('key'):
+                            temp_case_data['request']['data'].update({variable['key']: variable['value']})
+                        elif variable['param_type'] == 'file' and variable.get('key'):
+                            temp_case_data['request']['files'].update({variable['key']: (
+                                variable['value'].split('/')[-1], open(variable['value'], 'rb'),
+                                CONTENT_TYPE['.{}'.format(variable['value'].split('.')[-1])])})
+
                 else:
-                    if one_case.variable_type == 'data':
-                        temp_case_data['request']['data'] = {variable['key']: variable['value'] for variable in
-                                                             json.loads(case.variables) if
-                                                             variable['param_type'] == 'string' and variable[
-                                                                 'key']}
+                    temp_case_data['request']['json'] = _variables
 
-                        for variable in json.loads(case.variables):
-                            if variable['param_type'] == 'file':
-                                temp_case_data['request']['files'].update({
-                                    variable['key']: (
-                                        variable['value'].split('/')[-1], open(variable['value'], 'rb'),
-                                        CONTENT_TYPE['.{}'.format(variable['value'].split('.')[-1])])})
-                    else:
-
-                        temp_case_data['request']['json'] = json.loads(case.variables)
+        if not self.run_type or json.loads(scene_case.status_extract)[0]:
+            if not self.run_type or json.loads(scene_case.status_extract)[1]:
+                _extract_temp = scene_case.extract
             else:
-                if one_case.method == 'GET':
-                    temp_case_data['request']['params'] = {variable['key']: variable['value'] for variable in
-                                                           json.loads(one_case.variables) if variable['key']}
-                else:
-                    if one_case.variable_type == 'data':
-                        temp_case_data['request']['data'] = {variable['key']: variable['value'] for variable in
-                                                             json.loads(one_case.variables) if
-                                                             variable['param_type'] == 'string' and variable[
-                                                                 'key']}
+                _extract_temp = api_case.extract
 
-                        for variable in json.loads(one_case.variables):
-                            if variable['param_type'] == 'file':
-                                temp_case_data['request']['files'].update({
-                                    'file': (variable['value'].split('/')[-1], open(variable['value'], 'rb'),
-                                             CONTENT_TYPE['.{}'.format(variable['value'].split('.')[-1])])})
-                    else:
+            temp_case_data['extract'] = [{ext['key']: ext['value']} for ext in json.loads(_extract_temp) if
+                                         ext.get('key')]
 
-                        temp_case_data['request']['json'] = json.loads(one_case.variables)
-
-        if not self.run_type or json.loads(case.status_extract)[0]:
-            if not self.run_type or json.loads(case.status_extract)[1]:
-                temp_case_data['extract'] = [{ext['key']: ext['value']} for ext in json.loads(case.extract) if
-                                             ext['key']]
+        if not self.run_type or json.loads(scene_case.status_validate)[0]:
+            if not self.run_type or json.loads(scene_case.status_validate)[1]:
+                _validate_temp = scene_case.validate
             else:
-                if json.loads(one_case.extract):
-                    temp_case_data['extract'] = [{ext['key']: ext['value']} for ext in
-                                                 json.loads(one_case.extract) if ext['key']]
+                _validate_temp = api_case.validate
+            temp_case_data['validate'] = [{val['comparator']: [val['key'], val['value']]} for val in
+                                          json.loads(_validate_temp) if val.get('key')]
 
-        if not self.run_type or json.loads(case.status_validate)[0]:
-            if not self.run_type or json.loads(case.status_validate)[1]:
-                temp_case_data['validate'] = [{val['comparator']: [val['key'], val['value']]} for val in
-                                              json.loads(case.validate) if val['key']]
-            else:
-                if json.loads(one_case.validate):
-                    temp_case_data['validate'] = [{val['comparator']: [val['key'], val['value']]} for val in
-                                                  json.loads(one_case.validate) if val['key']]
         return temp_case_data
 
     def all_cases_data(self):
@@ -185,6 +144,7 @@ class RunCase(object):
             for scene in scene_ids:
                 scene_data = Scene.query.filter_by(id=scene).first()
                 pro_config = self.pro_config(scene_data.project_id)
+                pro_config['config']['name'] = scene_data.name
 
                 if scene_data.func_address:
                     pro_config['config']['import_module_functions'] = [
@@ -194,11 +154,12 @@ class RunCase(object):
                     scene_config = json.loads(scene_data.variables)
                 else:
                     scene_config = []
-                pro_config = self.merge_config(pro_config, scene_config)
+                pro_config = merge_config(pro_config, scene_config)
 
                 for case in ApiCase.query.filter_by(scene_id=scene).order_by(ApiCase.num.asc()).all():
-                    pro_config['testcases'].append(
-                        self.get_case(case, Project.query.filter_by(id=scene_data.project_id).first()))
+                    if case.status == 'true':
+                        pro_config['testcases'].append(
+                            self.get_case(case, Project.query.filter_by(id=scene_data.project_id).first()))
                 temp_case.append(copy.deepcopy(pro_config))
             return temp_case
         if self.case_data:
@@ -208,12 +169,12 @@ class RunCase(object):
                 _config = []
             else:
                 _config = json.loads(config_data.variables)
+            if config_data:
+                if config_data.func_address:
+                    pro_config['config']['import_module_functions'] = [
+                        'func_list.{}'.format(config_data.func_address.replace('.py', ''))]
 
-            if config_data.func_address:
-                pro_config['config']['import_module_functions'] = [
-                    'func_list.{}'.format(config_data.func_address.replace('.py', ''))]
-
-            pro_config = self.merge_config(pro_config, _config)
+            pro_config = merge_config(pro_config, _config)
             for case in self.case_data[1]:
                 pro_config['testcases'].append(
                     self.get_case(case, Project.query.filter_by(id=self.project_id).first()))
@@ -233,41 +194,54 @@ class RunCase(object):
         res = main_ate(d)
 
         res['time']['duration'] = "%.2f" % res['time']['duration']
+        res['stat']['successes_1'] = res['stat']['successes']
+        res['stat']['failures_1'] = res['stat']['failures']
+        res['stat']['errors_1'] = res['stat']['errors']
         res['stat']['successes'] = "{} ({}%)".format(res['stat']['successes'],
                                                      int(res['stat']['successes'] / res['stat']['testsRun'] * 100))
         res['stat']['failures'] = "{} ({}%)".format(res['stat']['failures'],
                                                     int(res['stat']['failures'] / res['stat']['testsRun'] * 100))
+        res['stat']['errors'] = "{} ({}%)".format(res['stat']['errors'],
+                                                  int(res['stat']['errors'] / res['stat']['testsRun'] * 100))
+        res['stat']['successes_scene'] = 0
+        res['stat']['failures_scene'] = 0
+        for num_1, res_1 in enumerate(res['details']):
+            if res_1['success']:
+                res['stat']['successes_scene'] += 1
+            else:
+                res['stat']['failures_scene'] += 1
+            for num_2, rec_2 in enumerate(res_1['records']):
+                if isinstance(rec_2['meta_data']['response']['content'], bytes):
+                    rec_2['meta_data']['response']['content'] = bytes.decode(rec_2['meta_data']['response']['content'])
+                if rec_2['meta_data']['request'].get('body'):
+                    if isinstance(rec_2['meta_data']['request']['body'], bytes):
+                        rec_2['meta_data']['request']['body'] = bytes.decode(rec_2['meta_data']['request']['body'])
 
-        import collections
-        tree = lambda: collections.defaultdict(tree)
-        some_dict = tree()
-        some_dict = some_dict.update(res)
-        print(some_dict)
-        for num, rec in enumerate(res['records']):
-            # try:
-            # if not rec['meta_data'].get('url'):
-            #     rec['meta_data']['url'] = self.temporary_url[num] + '\n(url请求失败，这为原始url，)'
-            if 'Linux' in platform.platform():
-                rec['meta_data']['response_time(ms)'] = rec['meta_data'].get('response_time_ms')
-            if rec['meta_data'].get('response_headers'):
-                rec['meta_data']['response_headers'] = dict(res['records'][num]['meta_data']['response_headers'])
-            if rec['meta_data'].get('request_headers'):
-                rec['meta_data']['request_headers'] = dict(res['records'][num]['meta_data']['request_headers'])
+                if rec_2['meta_data']['response'].get('cookies'):
+                    rec_2['meta_data']['response']['cookies'] = dict(
+                        res['details'][0]['records'][0]['meta_data']['response']['cookies'])
+                    # for num, rec in enumerate(res['details'][0]['records']):
+                    # try:
+                    # if not rec['meta_data'].get('url'):
+                    #     rec['meta_data']['url'] = self.temporary_url[num] + '\n(url请求失败，这为原始url，)'
+                    # if 'Linux' in platform.platform():
+                    #     rec['meta_data']['response_time(ms)'] = rec['meta_data'].get('response_time_ms')
+                    # if rec['meta_data'].get('response_headers'):
+                    #     rec['meta_data']['response_headers'] = dict(res['records'][num]['meta_data']['response_headers'])
+                    # if rec['meta_data'].get('request_headers'):
+                    #     rec['meta_data']['request_headers'] = dict(res['records'][num]['meta_data']['request_headers'])
+                    # if rec['meta_data'].get('request_body'):
+                    #     if isinstance(rec['meta_data']['request_body'], bytes):
+                    #         if b'filename=' in rec['meta_data']['request_body']:
+                    #             rec['meta_data']['request_body'] = '暂不支持显示文件上传的request_body'
+                    #         else:
+                    #             rec['meta_data']['request_body'] = rec['meta_data']['request_body'].decode('unicode-escape')
 
-            if rec['meta_data'].get('request_body'):
-                if isinstance(rec['meta_data']['request_body'], bytes):
-                    if b'filename=' in rec['meta_data']['request_body']:
-                        rec['meta_data']['request_body'] = '暂不支持显示文件上传的request_body'
-                    else:
-                        rec['meta_data']['request_body'] = rec['meta_data']['request_body'].decode('unicode-escape')
-                        # rec['meta_data']['request_body'] = bytes.decode(rec['meta_data']['request_body'])
-            if rec['meta_data'].get('response_body'):
-                if isinstance(rec['meta_data']['response_body'], bytes):
-                    rec['meta_data']['response_body'] = bytes.decode(rec['meta_data']['response_body'])
-                    # except Exception as e:
-                    #     print(e)
-            if not rec['meta_data'].get('response_headers'):
-                rec['meta_data']['response_headers'] = 'None'
+                    # if rec['meta_data'].get('response_body'):
+                    #     if isinstance(rec['meta_data']['response_body'], bytes):
+                    #         rec['meta_data']['response_body'] = bytes.decode(rec['meta_data']['response_body'])
+                    # if not rec['meta_data'].get('response_headers'):
+                    #     rec['meta_data']['response_headers'] = 'None'
 
         res['time']['start_at'] = now_time.strftime('%Y/%m/%d %H:%M:%S')
         jump_res = json.dumps(res, ensure_ascii=False)

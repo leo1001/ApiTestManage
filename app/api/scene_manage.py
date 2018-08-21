@@ -17,11 +17,16 @@ def add_scene():
     ids = data.get('ids')
     func_address = data.get('funcAddress')
     project = data.get('project')
-    project_id = Project.query.filter_by(name=project).first().id
+    project_data = Project.query.filter_by(name=project).first()
+    project_id = project_data.id
     num = auto_num(data.get('num'), Scene, project_id=project_id)
     variable = data.get('variable')
     cases = data.get('cases')
 
+    merge_variable = json.dumps(json.loads(variable) + json.loads(project_data.variables))
+    _temp_check = extract_variables(convert(json.loads(merge_variable)))
+    if _temp_check:
+        return jsonify({'msg': '参数引用${}在业务变量和项目公用变量均没找到'.format(',$'.join(_temp_check)), 'status': 0})
     if re.search('\${(.*?)}', '{}{}'.format(variable, json.dumps(cases)), flags=0) and not func_address:
         return jsonify({'msg': '参数引用函数后，必须引用函数文件', 'status': 0})
 
@@ -59,6 +64,7 @@ def add_scene():
                 old_api_case.status_extract = json.dumps(c['statusCase']['extract'])
                 old_api_case.status_validate = json.dumps(c['statusCase']['validate'])
                 old_api_case.name = c['case_name']
+                old_api_case.status = json.dumps(c['status'])
                 old_api_case.up_func = c['up_func']
                 old_api_case.down_func = c['down_func']
                 if c['variableType'] == 'json':
@@ -78,6 +84,7 @@ def add_scene():
                                    status_variables=json.dumps(c['statusCase']['variable']),
                                    status_extract=json.dumps(c['statusCase']['extract']),
                                    status_validate=json.dumps(c['statusCase']['validate']),
+                                   status=json.dumps(c['status']),
                                    name=c['case_name'], up_func=c['up_func'], down_func=c['down_func'])
                 db.session.add(new_case)
                 db.session.commit()
@@ -105,6 +112,7 @@ def add_scene():
                                    status_variables=json.dumps(c['statusCase']['variable']),
                                    status_extract=json.dumps(c['statusCase']['extract']),
                                    status_validate=json.dumps(c['statusCase']['validate']),
+                                   status=json.dumps(c['status']),
                                    name=c['case_name'], up_func=c['up_func'], down_func=c['down_func'])
                 db.session.add(new_case)
                 db.session.commit()
@@ -175,6 +183,7 @@ def edit_scene():
         case_data.append({'num': case.num, 'name': ApiMsg.query.filter_by(id=case.apiMsg_id).first().name,
                           'desc': ApiMsg.query.filter_by(id=case.apiMsg_id).first().desc, 'api_caseId': case.id,
                           'id': case.id,
+                          'status': json.loads(case.status),
                           'variableType': ApiMsg.query.filter_by(id=case.apiMsg_id).first().variable_type,
                           'variables': variable,
                           'case_name': case.name,
@@ -192,6 +201,7 @@ def edit_scene():
         _data['variables'] = json.loads(_edit.variables)
     else:
         _data['variables'] = []
+
     return jsonify({'data': _data, 'status': 1})
 
 

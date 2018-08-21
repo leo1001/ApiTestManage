@@ -1,12 +1,10 @@
-import importlib
-
 from flask import jsonify, request
-from . import api
-from app.models import *
-import json
-import re
-from ..util.http_run import RunCase
 from flask_login import current_user
+
+from app.models import *
+from app.util.case_change.core import HarParser, postman_parser
+from . import api
+from ..util.http_run import RunCase
 from ..util.utils import *
 
 
@@ -92,14 +90,14 @@ def add_cases():
         return jsonify({'msg': '设置前后置函数后必须引用函数文件', 'status': 0})
 
     case_url = data.get('caseUrl')
-    if not case_url:
-        return jsonify({'msg': '接口url不能为空', 'status': 0})
-    elif re.search('\${(.*?)}', case_url, flags=0) and not func_address:
-        return jsonify({'msg': 'url引用函数后，基础信息处必须引用函数文件', 'status': 0})
-
+    # if not case_url:
+    #     return jsonify({'msg': '接口url不能为空', 'status': 0})
+    # elif re.search('\${(.*?)}', case_url, flags=0) and not func_address:
+    #     return jsonify({'msg': 'url引用函数后，基础信息处必须引用函数文件', 'status': 0})
+    #
     case_variable = data.get('caseVariable')
-    if re.search('\${(.*?)}', case_variable, flags=0) and not func_address:
-        return jsonify({'msg': '参数引用函数后，基础信息处必须引用函数文件', 'status': 0})
+    # if re.search('\${(.*?)}', case_variable, flags=0) and not func_address:
+    #     return jsonify({'msg': '参数引用函数后，基础信息处必须引用函数文件', 'status': 0})
 
     project_id = Project.query.filter_by(name=project_name).first().id
     module_id = Module.query.filter_by(name=gather_name, project_id=project_id).first().id
@@ -204,7 +202,6 @@ def run_case():
     case_data_id.sort(key=lambda x: x[0])
 
     old_case_data = [ApiMsg.query.filter_by(id=c[1]).first() for c in case_data_id]
-
     d = RunCase(project_names=project_name, case_data=[config_name, old_case_data])
     res = json.loads(d.run_case())
     return jsonify({'msg': '测试完成', 'data': res, 'status': 1})
@@ -247,7 +244,8 @@ def find_cases():
              'variableType': c.variable_type,
              'variables': variable, 'extract': json.loads(c.extract),
              'validate': json.loads(c.validate),
-             'statusCase': {'extract': [True, False], 'variable': [True, False], 'validate': [True, False]}})
+             'statusCase': {'extract': [True, True], 'variable': [True, True], 'validate': [True, True]},
+             'status': True, 'case_name': c.name, 'down_func':'', 'up_func':''})
     return jsonify({'data': _case, 'total': total, 'status': 1})
 
 
@@ -265,6 +263,48 @@ def del_cases():
     for d in del_case:
         db.session.delete(d)
     return jsonify({'msg': '删除成功', 'status': 1})
+
+
+@api.route('/cases/fileChange', methods=['POST'])
+def file_change():
+    data = request.json
+    project_name = data.get('projectName')
+    gather_name = data.get('gatherName')
+    if not gather_name and not project_name:
+        return jsonify({'msg': '项目和模块不能为空', 'status': 0})
+    import_format = data.get('importFormat')
+    if not import_format:
+        return jsonify({'msg': '请选择文件格式', 'status': 0})
+
+    import_format = 'har' if import_format == 'HAR' else 'json'
+    project_data = Project.query.filter_by(name=project_name).first()
+    host = [project_data.host, project_data.host_two, project_data.host_three, project_data.host_four]
+    project_id = project_data.id
+    module_id = Module.query.filter_by(name=gather_name, project_id=project_id).first().id
+
+    import_api_address = data.get('importApiAddress')
+    if not import_api_address:
+        return jsonify({'msg': '请上传文件', 'status': 0})
+    har_parser = HarParser(import_api_address, import_format)
+    case_num = auto_num(data.get('caseNum'), ApiMsg, module_id=module_id)
+    # har_parser = postman_parser(import_api_address)
+    # for msg in har_parser:
+    for msg in har_parser.testset:
+        # status_url = msg['test']['url'].replace(msg['test']['name'], '')
+        # msg['test']['url'] = msg['test']['name']
+        # print(msg['test']['status_url'])
+        for h in host:
+            if msg['status_url'] in h:
+                msg['status_url'] = host.index(h)
+                break
+        else:
+            msg['status_url'] = '0'
+        new_case = ApiMsg(module_id=module_id, num=case_num, **msg)
+        db.session.add(new_case)
+        db.session.commit()
+        case_num += 1
+
+    return jsonify({'msg': '导入成功', 'status': 1})
 
 #
 # @api.route('/cases/del1', methods=['POST'])
